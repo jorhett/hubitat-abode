@@ -19,9 +19,9 @@
     // capability 'Alarm'
     // capability 'Chime'
     capability 'Refresh'
-    command 'armAway'
-    command 'armHome'
-    command 'disarm'
+    command 'armAway', [[name: 'areaNumber', type: 'NUMBER', description: 'Area to arm Away (empty = all areas)', constraints:['NUMBER']]]
+    command 'armHome', [[name: 'areaNumber', type: 'NUMBER', description: 'Area to arm Home (empty = all areas)', constraints:['NUMBER']]]
+    command 'disarm',  [[name: 'areaNumber', type: 'NUMBER', description: 'Area to disarm (empty = all areas)',   constraints:['NUMBER']]]
     command 'logout'
     attribute 'isLoggedIn', 'String'
   }
@@ -87,16 +87,16 @@ def uninstalled() {
   log.debug 'uninstalled'
 }
 
-def disarm() {
-  changeMode('standby')
+def disarm(area_input = null) {
+  changeMode('standby', area_input)
 }
 
-def armHome() {
-  changeMode('home')
+def armHome(area_input = null) {
+  changeMode('home', area_input)
 }
 
-def armAway() {
-  changeMode('away')
+def armAway(area_input = null) {
+  changeMode('away', area_input)
 }
 
 def disableDebug(String level) {
@@ -108,20 +108,13 @@ def disableTrace(String level) {
   device.updateSetting("logTrace", [value: 'false', type: 'bool'])
 }
 
-def changeMode(String new_mode) {
-  state.mode.each() { area, mode ->
-    if(mode == new_mode) {
-      log.debug "${area} is already in mode ${new_mode}"
-    }
-    else {
-      log.error "Don't have code to change ${area} mode to ${new_mode}"
-    }
-  }
-}
-
 // Abode actions
 private baseURL() {
   return 'https://my.goabode.com'
+}
+
+private driverUserAgent() {
+  return 'AbodeAlarm/0.2.0 Hubitat Evolution driver'
 }
 
 private login() {
@@ -173,6 +166,26 @@ def logout() {
 private clearState() {
   state.clear()
   sendEvent(name: 'isLoggedIn', value: false, displayed: true)
+}
+
+private changeMode(String new_mode, area_input = null) {
+  modeMap = state.mode
+  areas = (area_input == null) ? modeMap.keySet() : [area_input]
+  areas.each() { area_number ->
+    current_mode = modeMap[area_number]
+    if(current_mode == new_mode) {
+      if (logDebug) log.debug "Area ${area_number} is already in mode ${new_mode}"
+    }
+    else {
+      reply = putHttp('/api/v1/panel/mode/' + area_number + '/' + new_mode)
+      if (reply['area'] == area_number.toString()) {
+        if (logDebug) log.debug "Area ${reply['area']} has been set to mode ${reply['mode']}"
+        modeMap[reply['area']] = reply['mode']
+      }
+    }
+  }
+  state.mode = modeMap
+  sendEvent(name: 'mode', value: modeMap, displayed: true)
 }
 
 // Abode types
@@ -243,8 +256,7 @@ private parseMode(Map mode, Set areas) {
   modeMap = [:]
   // Collect mode for each area
   areas.each() { number ->
-    area = "area_${number}"
-    modeMap[area] = mode[area]
+    modeMap[number] = mode["area_${number}"]
   }
   state.mode = modeMap
 
@@ -290,7 +302,8 @@ private getHttp(String path) {
     path: path,
     headers: [
       'Authorization': "Bearer ${state.access_token}",
-      'ABODE-API-KEY': state.token
+      'ABODE-API-KEY': state.token,
+      'User-Agent': driverUserAgent(),
     ],
   ]
   try {
@@ -303,6 +316,39 @@ private getHttp(String path) {
     }
   } catch(error) {
     log.error "getHttp(${path}) result: ${error.response.status} ${error.response.data?.message}"
+    error.response.data?.errors?.each() { errormsg ->
+      log.warn errormsg.toString()
+    }
+    if (logTrace) log.trace error.response.data
+    status = error.response.status?.toString()
+    message = error.response.data?.message ?: path
+  }
+  sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, displayed: true)
+  return result
+}
+
+private putHttp(String path) {
+  result = null
+  message = ''
+  params = [
+    uri: baseURL(),
+    path: path,
+    headers: [
+      'Authorization': "Bearer ${state.access_token}",
+      'ABODE-API-KEY': state.token,
+      'User-Agent': driverUserAgent(),
+    ],
+  ]
+  try {
+    httpPut(params) { response ->
+      status = response?.status.toString()
+      if (logDebug) log.debug "putHttp(${path}) results: ${response.status}"
+      if (logTrace) log.trace response.data
+      result = response.data
+      message = result?.message ?: ''
+    }
+  } catch(error) {
+    log.error "putHttp(${path}) result: ${error.response.status} ${error.response.data?.message}"
     error.response.data?.errors?.each() { errormsg ->
       log.warn errormsg.toString()
     }
