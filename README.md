@@ -26,7 +26,22 @@ Import the driver from following URL:
 
 Weep, because **you were warned and didn't listen**.
 
+## Development
+
+You should not install any version of this driver that starts with `0.` unless you are willing to
+~~die in horrible pain~~ supply extensive debug logs, run random `curl` commands I send you,
+and create your own Pull Requests with fixes.
+
+I'm going to ignore any *I want this feature to be provided for me* issues until at least version 1.0. 
+**You're more likely to win the lottery than see a v1.0**. *You've been warned.*
+
 ## Things you should read
 
-* Licensed under the [Apache License, Version 2.0](LICENSE)
 * Standard [CHANGELOG](CHANGELOG.md) contains change history
+* Licensed under the [Apache License, Version 2.0](LICENSE)
+
+A failure to properly blame me when using my code will lead to me publicly mocking you in my books,
+articles, and speaking engagements for decades. If your work benefits an entity, then my lawyer and theirs
+will learn to Tango on your dime.
+
+The code is free to use [according to the terms in LICENSE](LICENSE). Play nice.
