@@ -18,12 +18,15 @@
   ) {
     // capability 'Alarm'
     // capability 'Chime'
+    capability 'Actuator'
     capability 'Refresh'
     command 'armAway', [[name: 'areaNumber', type: 'NUMBER', description: 'Area to arm Away (empty = all areas)', constraints:['NUMBER']]]
     command 'armHome', [[name: 'areaNumber', type: 'NUMBER', description: 'Area to arm Home (empty = all areas)', constraints:['NUMBER']]]
     command 'disarm',  [[name: 'areaNumber', type: 'NUMBER', description: 'Area to disarm (empty = all areas)',   constraints:['NUMBER']]]
     command 'logout'
     attribute 'isLoggedIn', 'String'
+    attribute 'area_1', 'String'
+    attribute 'area_2', 'String'
   }
 
   preferences {
@@ -181,11 +184,11 @@ private changeMode(String new_mode, area_input = null) {
       if (reply['area'] == area_number.toString()) {
         if (logDebug) log.debug "Area ${reply['area']} has been set to mode ${reply['mode']}"
         modeMap[reply['area']] = reply['mode']
+        sendEvent(name: "area_${area_number}", value: reply['mode'], displayed: true)
       }
     }
   }
   state.mode = modeMap
-  sendEvent(name: 'mode', value: modeMap, displayed: true)
 }
 
 // Abode types
@@ -257,6 +260,11 @@ private parseMode(Map mode, Set areas) {
   // Collect mode for each area
   areas.each() { number ->
     modeMap[number] = mode["area_${number}"]
+    area_name = 'area_' + number
+    if (modeMap[number] != mode[area_name]) {
+      modeMap[number] = mode[area_name]
+      sendEvent(name: area_name, value: mode[area_name], displayed: true)
+    }
   }
   state.mode = modeMap
 
@@ -309,8 +317,8 @@ private getHttp(String path) {
   try {
     httpGet(params) { response ->
       status = response?.status.toString()
+      if (logTrace) log.trace response
       if (logDebug) log.debug "getHttp(${path}) results: ${response.status}"
-      if (logTrace) log.trace response.data
       result = response.data
       message = result?.message ?: ''
     }
@@ -341,9 +349,9 @@ private putHttp(String path) {
   ]
   try {
     httpPut(params) { response ->
-      status = response?.status.toString()
+      if (logTrace) log.trace response
       if (logDebug) log.debug "putHttp(${path}) results: ${response.status}"
-      if (logTrace) log.trace response.data
+      status = response?.status.toString()
       result = response.data
       message = result?.message ?: ''
     }
