@@ -4,6 +4,13 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-03-15 Release 0.3.0
+
+### Changed
+
+- Retain SESSION cookie for persistent session
+- Handle errors that are not from net.http implementation properly
+
 ## 2020-03-12 Release 0.2.1
 
 ### Added

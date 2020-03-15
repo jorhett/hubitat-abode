@@ -54,6 +54,7 @@ def installed() {
 
 private initialize() {
   state.uuid = UUID.randomUUID()
+  state.cookies = [:]
 }
 
 def updated() {
@@ -122,11 +123,14 @@ private driverUserAgent() {
 
 private login() {
   if(state.uuid == null) initialize()
-  def params = [
-    path: '/api/auth2/login',
-    body: [id: username, password: password, mfa_code: mfa_code, uuid: state.uuid, remember_me: 1]
+  input_values = [
+    id: username,
+    password: password,
+    mfa_code: mfa_code,
+    uuid: state.uuid,
+    remember_me: 1,
   ]
-  reply = postJson(params)
+  reply = doHttpRequest('POST', '/api/auth2/login', input_values)
   if(reply.containsKey('mfa_type')) {
     sendEvent(name: 'requiresMFA', value: reply.mfa_type, descriptionText: "Multi-Factor Authentication required: ${reply.mfa_type}", displayed: true)
   }
@@ -143,7 +147,7 @@ private validateSession() {
   user = getUser()
   logged_in = user?.id ? true : false
   if(! logged_in) {
-    if (auth.token) clearState()
+    if (state.token) clearState()
   }
   else {
     parseUser(user)
@@ -153,11 +157,7 @@ private validateSession() {
 
 def logout() {
   if(state.token && validateSession()) {
-    def params = [
-      path: '/api/v1/logout',
-      body: [:],
-    ]
-    reply = postJson(params)
+    reply = doHttpRequest('POST', '/api/v1/logout')
   }
   else {
     sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted logout when not logged in', displayed: true)
@@ -180,7 +180,7 @@ private changeMode(String new_mode, area_input = null) {
       if (logDebug) log.debug "Area ${area_number} is already in mode ${new_mode}"
     }
     else {
-      reply = putHttp('/api/v1/panel/mode/' + area_number + '/' + new_mode)
+      reply = doHttpRequest('PUT','/api/v1/panel/mode/' + area_number + '/' + new_mode)
       if (reply['area'] == area_number.toString()) {
         if (logDebug) log.debug "Area ${reply['area']} has been set to mode ${reply['mode']}"
         modeMap[reply['area']] = reply['mode']
@@ -193,37 +193,38 @@ private changeMode(String new_mode, area_input = null) {
 
 // Abode types
 private getAccessToken() {
-  reply = getHttp('/api/auth2/claims')
+  reply = doHttpRequest('GET','/api/auth2/claims')
   return reply?.access_token
 }
 
 private getPanel() {
-  getHttp('/api/v1/panel')
+  doHttpRequest('GET','/api/v1/panel')
 }
 
 private getUser() {
-  getHttp('/api/v1/user')
+  doHttpRequest('GET','/api/v1/user')
 }
 /* until I get to these
 private getSounds() {
-  getHttp('/api/v1/sounds')
+  doHttpRequest('GET','/api/v1/sounds')
 }
 
 private getSiren() {
-  getHttp('/api/v1/siren')
+  doHttpRequest('GET','/api/v1/siren')
 }
 
 private getDevices() {
-  getHttp('/api/v1/devices')
+  doHttpRequestdoRequestJson('GET','/api/v1/devices')
 }
 */
 
 private parseLogin(Map data) {
   state.token = data.token
   state.access_token = getAccessToken()
-  updateDataValue('loginExpires', data.expired_at)
+  state.loginExpires = data.expired_at
 
   // Login contains a panel hash which is different enough we can't reuse parsePanel()
+  device.data.remove('loginExpires')
   ['ip','mac','model','online'].each() { field ->
     updateDataValue(field, data.panel[field])
   }
@@ -272,97 +273,67 @@ private parseMode(Map mode, Set areas) {
 }
 
 // HTTP methods tuned for Abode
-private postJson(params) {
+private storeCookies(String cookies) {
+  // Cookies are comma separated, colon-delimited pairs
+  cookies.split(',').each {
+    namevalue = it.split(';')[0].split('=')
+    state.cookies[namevalue[0]] = namevalue[1]
+  }
+}
+
+private doHttpRequest(String method, String path, Map body = [:]) {
   result = [:]
   status = ''
   message = ''
-  params.uri = baseURL()
-  params.headers = ['User-Agent': driverUserAgent()]
+  params = [
+    uri: baseURL(),
+    path: path,
+    headers: ['User-Agent': driverUserAgent()],
+  ]
+  if (method == 'POST' && body.isEmpty() == false)
+    params.body = body
   if (state.token) params.headers['ABODE-API-KEY'] = state.token
-  try {
-    httpPostJson(params) { response ->
-      if (logTrace) log.trace response
-      if (logDebug) log.debug "postJson ${params.uri} results: ${response.status}"
-      status = response.status.toString()
-      result = response.data
-      message = result?.message ?: ''
-    }
-  } catch(error) {
-    log.error "postJson ${params.uri} result: ${error.response.status} ${error.response.data?.message}"
-    error.response.data?.errors?.each() { errormsg ->
-      log.warn errormsg.toString()
-    }
-    if (logTrace) log.trace error.response?.data
+  if (state.access_token) params.headers['Authorization'] = "Bearer ${state.access_token}"
+  if (state.cookies) params.headers['Cookie'] = state.cookies.collect { key, value -> "${key}=${value}" }.join('; ')
 
-    status = error.response.status?.toString()
-    message = error.response.data?.message ?: params['path']
+  Closure $parseResponse = { response ->
+    if (logTrace) log.trace response.data
+    if (logDebug) log.debug "HTTPS ${method} ${path} results: ${response.status}"
+    status = response.status.toString()
+    result = response.data
+    message = result?.message ?: "${method} ${path} successful"
+    if (response.headers.'Set-Cookie') storeCookies(response.headers.'Set-Cookie')
   }
-  sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, displayed: true)
-
-  return result
-}
-
-private getHttp(String path) {
-  result = null
-  message = ''
-  params = [
-    uri: baseURL(),
-    path: path,
-    headers: [
-      'Authorization': "Bearer ${state.access_token}",
-      'ABODE-API-KEY': state.token,
-      'User-Agent': driverUserAgent(),
-    ],
-  ]
   try {
-    httpGet(params) { response ->
-      status = response?.status.toString()
-      if (logTrace) log.trace response
-      if (logDebug) log.debug "getHttp(${path}) results: ${response.status}"
-      result = response.data
-      message = result?.message ?: ''
+    switch(method) {
+      case 'PATCH':
+        httpPatch(params, $parseResponse)
+        ;;
+      case 'POST':
+        httpPostJson(params, $parseResponse)
+        ;;
+      case 'PUT':
+        httpPut(params, $parseResponse)
+        ;;
+      default:
+        httpGet(params, $parseResponse)
+        ;;
     }
   } catch(error) {
-    log.error "getHttp(${path}) result: ${error.response.status} ${error.response.data?.message}"
-    error.response.data?.errors?.each() { errormsg ->
-      log.warn errormsg.toString()
+    // Is this an HTTP error or a different exception?
+    if (error.metaClass.respondsTo(error, 'response')) {
+      if (logTrace) log.trace error.response.data
+      status = error.response.status?.toString()
+      result = error.response.data
+      message = error.response.data?.message ?:  "${method} ${path} failed"
+      log.error "HTTPS ${method} ${path} result: ${error.response.status} ${error.response.data?.message}"
+      error.response.data?.errors?.each() { errormsg ->
+        log.warn errormsg.toString()
+      }
+    } else {
+      status = 'Exception'
+      log.error error.toString()
     }
-    if (logTrace) log.trace error.response.data
-    status = error.response.status?.toString()
-    message = error.response.data?.message ?: path
-  }
-  sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, displayed: true)
-  return result
-}
-
-private putHttp(String path) {
-  result = null
-  message = ''
-  params = [
-    uri: baseURL(),
-    path: path,
-    headers: [
-      'Authorization': "Bearer ${state.access_token}",
-      'ABODE-API-KEY': state.token,
-      'User-Agent': driverUserAgent(),
-    ],
-  ]
-  try {
-    httpPut(params) { response ->
-      if (logTrace) log.trace response
-      if (logDebug) log.debug "putHttp(${path}) results: ${response.status}"
-      status = response?.status.toString()
-      result = response.data
-      message = result?.message ?: ''
-    }
-  } catch(error) {
-    log.error "putHttp(${path}) result: ${error.response.status} ${error.response.data?.message}"
-    error.response.data?.errors?.each() { errormsg ->
-      log.warn errormsg.toString()
-    }
-    if (logTrace) log.trace error.response.data
-    status = error.response.status?.toString()
-    message = error.response.data?.message ?: path
   }
   sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, displayed: true)
   return result
