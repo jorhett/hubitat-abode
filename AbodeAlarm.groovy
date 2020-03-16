@@ -20,13 +20,12 @@
     // capability 'Chime'
     capability 'Actuator'
     capability 'Refresh'
-    command 'armAway', [[name: 'areaNumber', type: 'NUMBER', description: 'Area to arm Away (empty = all areas)', constraints:['NUMBER']]]
-    command 'armHome', [[name: 'areaNumber', type: 'NUMBER', description: 'Area to arm Home (empty = all areas)', constraints:['NUMBER']]]
-    command 'disarm',  [[name: 'areaNumber', type: 'NUMBER', description: 'Area to disarm (empty = all areas)',   constraints:['NUMBER']]]
+    command 'armAway'
+    command 'armHome'
+    command 'disarm'
     command 'logout'
     attribute 'isLoggedIn', 'String'
-    attribute 'area_1', 'String'
-    attribute 'area_2', 'String'
+    attribute 'gatewayMode', 'String'
   }
 
   preferences {
@@ -48,7 +47,7 @@
 // Hubitat standard methods
 def installed() {
   log.debug 'installed'
-  device.updateSetting('logInfo', [value: true, type: 'bool'])
+  device.updateSetting('showLogin', [value: true, type: 'bool'])
   initialize()
 }
 
@@ -69,7 +68,7 @@ def updated() {
 
   // Validate the session
   if (state.token == null) {
-    log.debug 'Not currently logged in.'
+    if (logDebug) log.debug 'Not currently logged in.'
     if (!username.isEmpty() && !password.isEmpty())
       login()
 
@@ -82,25 +81,26 @@ def updated() {
 }
 
 def refresh() {
-  if (validateSession())
+  if (validateSession()) {
     parsePanel(getPanel())
+    if (state.webSocketConnected != true)
+      connectEventSocket()
+  }
 }
 
 def uninstalled() {
   clearState()
-  log.debug 'uninstalled'
+  if (logDebug) log.debug 'uninstalled'
 }
 
-def disarm(area_input = null) {
-  changeMode('standby', area_input)
+def disarm() {
+  changeMode('standby')
 }
-
-def armHome(area_input = null) {
-  changeMode('home', area_input)
+def armHome() {
+  changeMode('home')
 }
-
-def armAway(area_input = null) {
-  changeMode('away', area_input)
+def armAway() {
+  changeMode('away')
 }
 
 def disableDebug(String level) {
@@ -118,7 +118,7 @@ private baseURL() {
 }
 
 private driverUserAgent() {
-  return 'AbodeAlarm/0.2.0 Hubitat Evolution driver'
+  return 'AbodeAlarm/0.4.0 Hubitat Elevation driver'
 }
 
 private login() {
@@ -145,6 +145,7 @@ private login() {
 // Make sure we're still authenticated
 private validateSession() {
   user = getUser()
+  // may not want to force logout
   logged_in = user?.id ? true : false
   if(! logged_in) {
     if (state.token) clearState()
@@ -158,6 +159,7 @@ private validateSession() {
 def logout() {
   if(state.token && validateSession()) {
     reply = doHttpRequest('POST', '/api/v1/logout')
+    terminateEventSocket()
   }
   else {
     sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted logout when not logged in', displayed: true)
@@ -168,27 +170,25 @@ def logout() {
 
 private clearState() {
   state.clear()
+  unschedule()
   sendEvent(name: 'isLoggedIn', value: false, displayed: true)
 }
 
-private changeMode(String new_mode, area_input = null) {
-  modeMap = state.mode
-  areas = (area_input == null) ? modeMap.keySet() : [area_input]
-  areas.each() { area_number ->
-    current_mode = modeMap[area_number]
-    if(current_mode == new_mode) {
-      if (logDebug) log.debug "Area ${area_number} is already in mode ${new_mode}"
-    }
-    else {
-      reply = doHttpRequest('PUT','/api/v1/panel/mode/' + area_number + '/' + new_mode)
-      if (reply['area'] == area_number.toString()) {
-        if (logDebug) log.debug "Area ${reply['area']} has been set to mode ${reply['mode']}"
-        modeMap[reply['area']] = reply['mode']
-        sendEvent(name: "area_${area_number}", value: reply['mode'], displayed: true)
-      }
-    }
+private changeMode(String new_mode) {
+  current_mode = mode
+  if(current_mode != new_mode) {
+    reply = doHttpRequest('PUT','/api/v1/panel/mode/1/' + new_mode)
+    if (reply['area'] == 1)
+      log.info "Successfully sent request to change gateway mode to ${new_mode}"
+  } else {
+    if (logDebug) log.debug "Gateway is already in mode ${new_mode}"
   }
-  state.mode = modeMap
+}
+
+// Only update area 1 since area is not provided in event messages
+private updateMode(String new_mode) {
+  if (logDebug) log.info 'Gateway mode has changed to ' + new_mode
+  sendEvent(name: "gatewayMode", value: new_mode, descriptionText: 'Gateway mode has changed to ' + new_mode, displayed: true)
 }
 
 // Abode types
@@ -246,7 +246,7 @@ private parsePanel(Map panel) {
     updateDataValue(field, panel[field])
   }
   areas = parseAreas(panel['areas']) ?: []
-  mode = parseMode(panel['mode'], areas) ?: {}
+  parseMode(panel['mode'], areas) ?: {}
 
   return panel
 }
@@ -261,15 +261,12 @@ private parseMode(Map mode, Set areas) {
   // Collect mode for each area
   areas.each() { number ->
     modeMap[number] = mode["area_${number}"]
-    area_name = 'area_' + number
-    if (modeMap[number] != mode[area_name]) {
-      modeMap[number] = mode[area_name]
-      sendEvent(name: area_name, value: mode[area_name], displayed: true)
-    }
   }
-  state.mode = modeMap
+  // Status is based on area 1 only
+  if (gatewayMode != modeMap['1'])
+    sendEvent(name: "gatewayMode", value: modeMap['1'], descriptionText: "Gateway mode is ${modeMap['1']}", displayed: true)
 
-  return modeMap
+  state.modes = modeMap
 }
 
 // HTTP methods tuned for Abode
@@ -308,16 +305,16 @@ private doHttpRequest(String method, String path, Map body = [:]) {
     switch(method) {
       case 'PATCH':
         httpPatch(params, $parseResponse)
-        ;;
+        break
       case 'POST':
         httpPostJson(params, $parseResponse)
-        ;;
+        break
       case 'PUT':
         httpPut(params, $parseResponse)
-        ;;
+        break
       default:
         httpGet(params, $parseResponse)
-        ;;
+        break
     }
   } catch(error) {
     // Is this an HTTP error or a different exception?
@@ -337,4 +334,191 @@ private doHttpRequest(String method, String path, Map body = [:]) {
   }
   sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, displayed: true)
   return result
+}
+
+// Abode websocket implementation
+private connectEventSocket() {
+  if (!state.webSocketConnectAttempt) state.webSocketConnectAttempt = 0
+  if (logDebug) log.debug "Attempting WebSocket connection for Abode events (attempt ${state.webSocketConnectAttempt})"
+  try {
+    interfaces.webSocket.connect('wss://my.goabode.com/socket.io/?EIO=3&transport=websocket', headers: [
+      'Origin': baseURL() + '/',
+      'Cookie': "SESSION=${state.cookies['SESSION']}",
+    ])
+    if (logDebug) log.debug 'Connection initiated'
+  }
+  catch(error) {
+    log.error 'WebSocket connection to Abode event socket failed: ' + error.message
+  }
+}
+
+private terminateEventSocket() {
+  if (logDebug) log.debug 'Disconnecting Abode event socket'
+  try {
+    interfaces.webSocket.close()
+    state.webSocketConnected = false
+    state.webSocketConnectAttempt = 0
+    if (logDebug) log.debug 'Connection terminated'
+  }
+  catch(error) {
+    log.error 'Disconnect of WebSocket from Abode portal failed: ' + error.message
+  }
+}
+
+def sendPing() {
+  if (logTrace) log.trace 'Sending webSocket ping'
+  interfaces.webSocket.sendMessage('2')
+}
+
+def sendPong() {
+  if (logTrace) log.trace 'Sending webSocket pong'
+  interfaces.webSocket.sendMessage('3')
+}
+
+def parseEvent(String event_text) {
+  twovalue = event_text =~ /^\["com\.goabode\.([\w+\.]+)",(.*)\]$/
+  if (twovalue.find()) {
+    event_type = twovalue[0][1]
+    event_data = twovalue[0][2]
+    switch(event_data) {
+      // JSON format
+      case ~/^\{.*\}$/:
+        details = parseJson(event_data)
+        message = details.event_name
+        break
+
+      // Quoted text
+      case ~/^".*"$/:
+        message = event_data[1..-2]
+        break
+
+      default:
+        log.error "Event ${event_type} has unknown data format: ${event_data}"
+        message = event_data
+        break
+    }
+    switch(event_type) {
+      case 'gateway.mode':
+        updateMode(message)
+        break
+
+      case ~/^gateway\.timeline.*/:
+        // device type is not included in all events
+        device_type = details.device_type ? " (${details.device_type})" : ''
+        if (logDebug) log.debug "${event_type} -${device_type} ${details.event_name}"
+
+        // Automation puts the rule name in device_name, which is backwards for our purposes
+        if (details.event_type == 'Automation')
+          sendEvent(name: 'Automation', value: details.device_name, descriptionText: details.event_name, displayed: true)
+        else
+          sendEvent(name: details.device_name, value: details.event_type, descriptionText: details.event_name + device_type, displayed: true)
+        break
+
+      default:
+        if (logDebug) log.debug "Ignoring Event ${event_type} ${message}"
+        break
+    }
+  } else {
+    log.error "Unparseable Event message: ${event_text}"
+  }
+}
+
+// Hubitat required method: This method is called with any incoming messages from the web socket server
+def parse(String message) {
+  if (logTrace) log.trace 'webSocket event raw: ' + message
+
+  // First character is the event type
+  event_type = message.substring(0,1)
+  // remainder is the data (optional)
+  event_data = message.substring(1)
+
+  switch(event_type) {
+    case '0':
+      log.info 'webSocket session open received'
+      jsondata = parseJson(event_data)
+      if (jsondata.containsKey('pingInterval')) state.webSocketPingInterval = jsondata['pingInterval']
+      if (jsondata.containsKey('pingTimeout'))  state.webSocketPingTimeout  = jsondata['pingTimeout']
+      if (jsondata.containsKey('sid'))          state.webSocketSid          = jsondata['sid']
+      break
+
+    case '1':
+      log.info 'webSocket session close received' + event_data
+      runIn(120, connectEventSocket)
+      break
+
+    case '2':
+      if (logTrace) log.trace 'webSocket Ping received, sending reply'
+      sendPong()
+      break
+
+    case '3':
+      if (logTrace) log.trace 'webSocket Pong received'
+      runInMillis(state.webSocketPingInterval, sendPing)
+      break
+
+    case '4':
+      // First character of the message indicates purpose
+      switch(event_data.substring(0,1)) {
+        case '0':
+          log.info 'webSocket message = Socket connected'
+          runInMillis(state.webSocketPingInterval, sendPing)
+          break
+
+        case '1':
+          log.info 'webSocket message = Socket disconnected'
+          break
+
+        case '2':
+          if (logTrace) log.trace 'webSocket message = Event: ' + event_data.substring(1)
+          parseEvent(event_data.substring(1))
+          break
+
+        case '4':
+          log.info 'webSocket message = Error: ' + event_data.substring(1)
+          break
+
+        default:
+          log.error "webSocket message = (unknown:${event_data.substring(0,1)}): " + event_data.substring(1)
+          break
+      }
+      break
+
+    default:
+      log.error "Unknown webSocket event (${event_type}) received: " + event_data
+      break
+  }
+}
+
+// Hubitat required method: This method is called with any status messages from the web socket client connection
+def webSocketStatus(String message) {
+  if (logTrace) log.trace 'webSocketStatus ' + message
+  switch(message) {
+    case ~/^status: open.*$/:
+      log.info 'Connected to Abode event socket'
+		  sendEvent([name: 'eventSocket', value: 'connected'])
+      state.webSocketConnected = true
+      state.webSocketConnectAttempt = 0
+		  break
+
+    case ~/^status: closing.*$/:
+      log.info 'Closing connection to Abode event socket'
+		  sendEvent([name: 'eventSocket', value: 'disconnected'])
+      state.webSocketConnected = false
+      state.webSocketConnectAttempt = 0
+      break
+
+    case ~/^failure:(.*)$/:
+      log.warn 'Event socket connection: ' + message
+      state.webSocketConnected = false
+      state.webSocketConnectAttempt += 1
+      break
+
+    default:
+      log.warn 'Event socket sent unexpected message: ' + message
+      state.webSocketConnected = false
+      state.webSocketConnectAttempt += 1
+  }
+
+  if (isLoggedIn && !state.webSocketConnected && state.webSocketConnectAttempt < 10)
+    runIn(120, 'connectEventSocket')
 }

@@ -4,6 +4,18 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-03-18 Release 0.4.0
+
+### Added
+
+- Maintain websocket connection for Abode events
+- Log timeline events to Hubitat events
+- Update status when received back from Abode
+
+### Changed
+
+- Track gateway mode from area_1 exclusively, since areas aren't specified in Abode events
+
 ## 2020-03-15 Release 0.3.0
 
 ### Changed
