@@ -48,7 +48,7 @@
 // Hubitat standard methods
 def installed() {
   log.debug 'installed'
-  device.updateSetting('logInfo', [value: true, type: 'bool'])
+  device.updateSetting('showLogin', [value: true, type: 'bool'])
   initialize()
 }
 
@@ -82,8 +82,11 @@ def updated() {
 }
 
 def refresh() {
-  if (validateSession())
+  if (validateSession()) {
     parsePanel(getPanel())
+    if (state.webSocketConnected != true)
+      connectEventSocket()
+  }
 }
 
 def uninstalled() {
@@ -145,6 +148,7 @@ private login() {
 // Make sure we're still authenticated
 private validateSession() {
   user = getUser()
+  // may not want to force logout
   logged_in = user?.id ? true : false
   if(! logged_in) {
     if (state.token) clearState()
@@ -158,6 +162,7 @@ private validateSession() {
 def logout() {
   if(state.token && validateSession()) {
     reply = doHttpRequest('POST', '/api/v1/logout')
+    terminateEventSocket()
   }
   else {
     sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted logout when not logged in', displayed: true)
@@ -168,6 +173,7 @@ def logout() {
 
 private clearState() {
   state.clear()
+  unschedule()
   sendEvent(name: 'isLoggedIn', value: false, displayed: true)
 }
 
@@ -308,16 +314,16 @@ private doHttpRequest(String method, String path, Map body = [:]) {
     switch(method) {
       case 'PATCH':
         httpPatch(params, $parseResponse)
-        ;;
+        break
       case 'POST':
         httpPostJson(params, $parseResponse)
-        ;;
+        break
       case 'PUT':
         httpPut(params, $parseResponse)
-        ;;
+        break
       default:
         httpGet(params, $parseResponse)
-        ;;
+        break
     }
   } catch(error) {
     // Is this an HTTP error or a different exception?
@@ -337,4 +343,142 @@ private doHttpRequest(String method, String path, Map body = [:]) {
   }
   sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, displayed: true)
   return result
+}
+
+// Abode websocket implementation
+private connectEventSocket() {
+  if (!state.webSocketConnectAttempt) state.webSocketConnectAttempt = 0
+  if (logDebug) log.debug "Attempting WebSocket connection for Abode events (attempt ${state.webSocketConnectAttempt})"
+  try {
+    interfaces.webSocket.connect('wss://my.goabode.com/socket.io/?EIO=3&transport=websocket', headers: [
+      'Origin': baseURL() + '/',
+      'Cookie': "SESSION=${state.cookies['SESSION']}",
+    ])
+    if (logDebug) log.debug 'Connection initiated'
+  }
+  catch(error) {
+    log.error 'WebSocket connection to Abode event socket failed: ' + error.message
+  }
+}
+
+private terminateEventSocket() {
+  if (logDebug) log.debug 'Disconnecting Abode event socket'
+  try {
+    interfaces.webSocket.close()
+    state.webSocketConnected = false
+    state.webSocketConnectAttempt = 0
+    if (logDebug) log.debug 'Connection terminated'
+  }
+  catch(error) {
+    log.error 'Disconnect of WebSocket from Abode portal failed: ' + error.message
+  }
+}
+
+def sendPing() {
+  if (logTrace) log.trace 'Sending webSocket ping'
+  interfaces.webSocket.sendMessage('2')
+}
+
+def sendPong() {
+  if (logTrace) log.trace 'Sending webSocket pong'
+  interfaces.webSocket.sendMessage('3')
+}
+
+// Hubitat required method: This method is called with any incoming messages from the web socket server
+def parse(String message) {
+  if (logTrace) log.trace 'webSocket event raw: ' + message
+
+  // First character is the event type
+  event_type = message.substring(0,1)
+  // remainder is the data (optional)
+  event_data = message.substring(1)
+
+  switch(event_type) {
+    case '0':
+      log.info 'webSocket session open received'
+      jsondata = parseJson(event_data)
+      if (jsondata.containsKey('pingInterval')) state.webSocketPingInterval = jsondata['pingInterval']
+      if (jsondata.containsKey('pingTimeout'))  state.webSocketPingTimeout  = jsondata['pingTimeout']
+      if (jsondata.containsKey('sid'))          state.webSocketSid          = jsondata['sid']
+      break
+
+    case '1':
+      log.info 'webSocket session close received' + event_data
+      runIn(120, connectEventSocket)
+      break
+
+    case '2':
+      log.debug 'webSocket Ping received, sending reply'
+      sendPong()
+      break
+
+    case '3':
+      log.debug 'webSocket Pong received'
+      runInMillis(state.webSocketPingInterval, sendPing)
+      break
+
+    case '4':
+      // First character of the message indicates purpose
+      switch(event_data.substring(0,1)) {
+        case '0':
+          log.info 'webSocket message = Socket connected'
+          runInMillis(state.webSocketPingInterval, sendPing)
+          break
+
+        case '1':
+          log.info 'webSocket message = Socket disconnected'
+          break
+
+        case '2':
+          log.info 'webSocket message = Event: ' + event_data.substring(1)
+          break
+
+        case '4':
+          log.info 'webSocket message = Error: ' + event_data.substring(1)
+          break
+
+        default:
+          log.error "webSocket message = (unknown:${event_data.substring(0,1)}): " + event_data.substring(1)
+          break
+      }
+      break
+
+    default:
+      log.error "Unknown webSocket event (${event_type}) received: " + event_data
+      break
+  }
+}
+
+// Hubitat required method: This method is called with any status messages from the web socket client connection
+def webSocketStatus(String message) {
+  if (logTrace) log.trace 'webSocketStatus ' + message
+  switch(message) {
+    case ~/^status: open.*$/:
+      log.info 'Connected to Abode event socket'
+		  sendEvent([name: 'eventSocket', value: 'connected'])
+      state.webSocketConnected = true
+      state.webSocketConnectAttempt = 0
+		  break
+
+    case ~/^status: closing.*$/:
+      log.info 'Closing connection to Abode event socket'
+		  sendEvent([name: 'eventSocket', value: 'disconnected'])
+      state.webSocketConnected = false
+      state.webSocketConnectAttempt = 0
+      break
+
+    case ~/^failure:(.*)$/:
+      log.warn 'Event socket connection: ' + message
+      state.webSocketConnected = false
+      state.webSocketConnectAttempt += 1
+      break
+
+    default:
+      log.warn 'Event socket sent unexpected message: ' + message
+      state.webSocketConnected = false
+      state.webSocketConnectAttempt += 1
+  }
+
+  if (isLoggedIn && !state.webSocketConnected && state.webSocketConnectAttempt < 10)
+    runIn(120, 'connectEventSocket')
 }
