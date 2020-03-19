@@ -37,9 +37,10 @@
       }
     }
     section('Behavior') {
-      input name: 'showLogin', type: 'bool', title: 'Show Login',           defaultValue: true,  description: '<em>Show login fields</em>', submitOnChange: true
-      input name: 'logDebug',  type: 'bool', title: 'Enable debug logging', defaultValue: true,  description: '<em>for 2 hours</em>'
-      input name: 'logTrace',  type: 'bool', title: 'Enable trace logging', defaultValue: false, description: '<em>for 30 minutes</em>'
+      input name: 'showLogin',    type: 'bool',   title: 'Show Login',           defaultValue: true,  description: '<em>Show login fields</em>', submitOnChange: true
+      input name: 'logDebug',     type: 'bool',   title: 'Enable debug logging', defaultValue: true,  description: '<em>for 2 hours</em>'
+      input name: 'logTrace',     type: 'bool',   title: 'Enable trace logging', defaultValue: false, description: '<em>for 30 minutes</em>'
+      input name: 'timeoutSlack', type: 'number', title: 'Timeout Slack',        defaultValue: '30',  description: '<em>seconds beyond timeout</em>'
     }
   }
 }
@@ -66,18 +67,21 @@ def updated() {
   if (logTrace) runIn(1800,disableTrace)
   if (logDebug) runIn(7200,disableDebug)
 
-  // Validate the session
-  if (state.token == null) {
-    if (logDebug) log.debug 'Not currently logged in.'
-    if (!username.isEmpty() && !password.isEmpty())
-      login()
-
-    // Clear the MFA token entry -- will be useless anyway
-    device.updateSetting('mfa_code', [value: '', type: 'text'])
-  }
-  else {
+  // Reasons we should attempt login again
+  if (
+    // If they supplied mfa code they want to login again
+    (!username.isEmpty() && !password.isEmpty() && mfa_code) ||
+    // If we aren't logged in, attempt login
+    (!username.isEmpty() && !password.isEmpty() && (state.token == null)) ||
+    // If they changed the username, attempt login
+    (!username.isEmpty() && !password.isEmpty() && (username != getDataValue('abodeID')))
+  )
+    login()
+  else
     validateSession()
-  }
+
+  // Clear the MFA token entry -- will be useless anyway
+  device.updateSetting('mfa_code', [value: '', type: 'text'])
 }
 
 def refresh() {
@@ -89,7 +93,7 @@ def refresh() {
 }
 
 def uninstalled() {
-  clearState()
+  clearLoginState()
   if (logDebug) log.debug 'uninstalled'
 }
 
@@ -132,23 +136,27 @@ private login() {
   ]
   reply = doHttpRequest('POST', '/api/auth2/login', input_values)
   if(reply.containsKey('mfa_type')) {
-    sendEvent(name: 'requiresMFA', value: reply.mfa_type, descriptionText: "Multi-Factor Authentication required: ${reply.mfa_type}", displayed: true)
+    updateDataValue('mfa_enabled', '1')
+    sendEvent(name: 'isLoggedIn', value: "false - requires ${reply.mfa_type}", descriptionText: "Multi-Factor Authentication required: ${reply.mfa_type}", displayed: true)
   }
-  if(reply.containsKey('token')) {
+  else if(reply.containsKey('token')) {
     sendEvent(name: 'isLoggedIn', value: true, displayed: true)
     device.updateSetting('showLogin', [value: false, type: 'bool'])
     parseLogin(reply)
     parsePanel(getPanel())
+    connectEventSocket()
   }
 }
 
 // Make sure we're still authenticated
 private validateSession() {
   user = getUser()
-  // may not want to force logout
   logged_in = user?.id ? true : false
   if(! logged_in) {
-    if (state.token) clearState()
+    if (state.token) {
+      sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted transaction when not logged in', displayed: true)
+      clearLoginState()
+    }
   }
   else {
     parseUser(user)
@@ -164,13 +172,13 @@ def logout() {
   else {
     sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted logout when not logged in', displayed: true)
   }
-  clearState()
-  device.updateSetting('showLogin', [value: true, type: 'bool'])
+  clearLoginState()
 }
 
-private clearState() {
+private clearLoginState() {
   state.clear()
   unschedule()
+  device.updateSetting('showLogin', [value: true, type: 'bool'])
   sendEvent(name: 'isLoggedIn', value: false, displayed: true)
 }
 
@@ -332,11 +340,11 @@ private doHttpRequest(String method, String path, Map body = [:]) {
       log.error error.toString()
     }
   }
-  sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, displayed: true)
+  sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, type: 'API call', displayed: true)
   return result
 }
 
-// Abode websocket implementation
+// Abode websocket handling
 private connectEventSocket() {
   if (!state.webSocketConnectAttempt) state.webSocketConnectAttempt = 0
   if (logDebug) log.debug "Attempting WebSocket connection for Abode events (attempt ${state.webSocketConnectAttempt})"
@@ -345,10 +353,11 @@ private connectEventSocket() {
       'Origin': baseURL() + '/',
       'Cookie': "SESSION=${state.cookies['SESSION']}",
     ])
-    if (logDebug) log.debug 'Connection initiated'
+    if (logDebug) log.debug 'EventSocket connection initiated'
+    runEvery5Minutes(checkSocketTimeout)
   }
   catch(error) {
-    log.error 'WebSocket connection to Abode event socket failed: ' + error.message
+    log.error 'WebSocket connection to Abode event socket failed: ' + error.toString()
   }
 }
 
@@ -358,11 +367,17 @@ private terminateEventSocket() {
     interfaces.webSocket.close()
     state.webSocketConnected = false
     state.webSocketConnectAttempt = 0
-    if (logDebug) log.debug 'Connection terminated'
+    if (logDebug) log.debug 'EventSocket connection terminated'
   }
   catch(error) {
-    log.error 'Disconnect of WebSocket from Abode portal failed: ' + error.message
+    log.error 'Disconnect of WebSocket from Abode portal failed: ' + error.toString()
   }
+}
+
+private restartEventSocket() {
+  terminateEventSocket()
+  refresh()
+  runInMillis(30000, connectEventSocket) // Try connect again in 30 seconds
 }
 
 def sendPing() {
@@ -375,16 +390,77 @@ def sendPong() {
   interfaces.webSocket.sendMessage('3')
 }
 
+def receivePong() {
+  runInMillis(state.webSocketPingInterval, sendPing)
+}
+
+def checkSocketTimeout() {
+  responseTimeout = state.lastMsgReceived + state.webSocketPingTimeout + (timeoutSlack*1000)
+  if (now() > responseTimeout) {
+    log.warn 'Socket ping timeout - Disconnecting Abode event socket'
+    restartEventSocket()
+  }
+}
+
+// Websocket message parsing
+private devicesToIgnore() {
+  return [
+    // Don't need to log what the camera captured
+    'Iota Cam'
+  ]
+}
+
+// These events have corresponding timeline and don't appear actionable
+private eventsToIgnore() {
+  return [
+    // Internal alarm tracking events used by Abode responders
+    'alarm.add',
+    'alarm.del',
+  ]
+}
+
+String formatEventUser(HashMap jsondata) {
+  userdata = ''
+  if (jsondata.user_name) {
+    userdata += ' by ' + jsondata.user_name
+  }
+  if (jsondata.mobile_name) {
+    userdata += ' using ' + jsondata.mobile_name
+  }
+  return userdata
+}
+
 def parseEvent(String event_text) {
   twovalue = event_text =~ /^\["com\.goabode\.([\w+\.]+)",(.*)\]$/
   if (twovalue.find()) {
     event_type = twovalue[0][1]
     event_data = twovalue[0][2]
     switch(event_data) {
+      case 'null':
+        message = 'null'
+        break
+
       // JSON format
       case ~/^\{.*\}$/:
         details = parseJson(event_data)
         message = details.event_name
+        user_info = formatEventUser(details)
+        device_type = details.device_type ?: ''
+        alert_name = details.device_name ?: 'unknown'
+        alert_value = details.event_type
+
+        if (details.event_type == 'Automation') {
+          alert_type = 'CUE Automation'
+          // Automation puts the rule name in device_name, which is backwards for our purposes
+          alert_name = 'Automation'
+          alert_value = details.device_name
+        }
+        else if (user_info)
+          alert_type = user_info
+        else if (device_type != '')
+          alert_type = device_type
+        else
+          alert_type = ''
         break
 
       // Quoted text
@@ -398,20 +474,19 @@ def parseEvent(String event_text) {
         break
     }
     switch(event_type) {
+      case eventsToIgnore:
+        break
+
       case 'gateway.mode':
         updateMode(message)
         break
 
       case ~/^gateway\.timeline.*/:
-        // device type is not included in all events
-        device_type = details.device_type ? " (${details.device_type})" : ''
-        if (logDebug) log.debug "${event_type} -${device_type} ${details.event_name}"
+        if (logDebug) log.debug "${event_type} -${device_type} ${message}"
 
-        // Automation puts the rule name in device_name, which is backwards for our purposes
-        if (details.event_type == 'Automation')
-          sendEvent(name: 'Automation', value: details.device_name, descriptionText: details.event_name, displayed: true)
-        else
-          sendEvent(name: details.device_name, value: details.event_type, descriptionText: details.event_name + device_type, displayed: true)
+        // Devices we ignore events for
+        if (! devicesToIgnore().contains(details.device_name))
+          sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
         break
 
       default:
@@ -425,6 +500,7 @@ def parseEvent(String event_text) {
 
 // Hubitat required method: This method is called with any incoming messages from the web socket server
 def parse(String message) {
+  state.lastMsgReceived = now()
   if (logTrace) log.trace 'webSocket event raw: ' + message
 
   // First character is the event type
@@ -442,8 +518,8 @@ def parse(String message) {
       break
 
     case '1':
-      log.info 'webSocket session close received' + event_data
-      runIn(120, connectEventSocket)
+      log.info 'webSocket session close received'
+      restartEventSocket()
       break
 
     case '2':
@@ -453,32 +529,36 @@ def parse(String message) {
 
     case '3':
       if (logTrace) log.trace 'webSocket Pong received'
-      runInMillis(state.webSocketPingInterval, sendPing)
+      receivePong()
       break
 
     case '4':
       // First character of the message indicates purpose
-      switch(event_data.substring(0,1)) {
+      message_type = event_data.substring(0,1)
+      message_data = event_data.substring(1)
+      switch(message_type) {
         case '0':
-          log.info 'webSocket message = Socket connected'
+          log.info 'webSocket message = Event socket connected'
           runInMillis(state.webSocketPingInterval, sendPing)
           break
 
         case '1':
-          log.info 'webSocket message = Socket disconnected'
+          log.info 'webSocket message = Event socket disconnected'
           break
 
         case '2':
-          if (logTrace) log.trace 'webSocket message = Event: ' + event_data.substring(1)
-          parseEvent(event_data.substring(1))
+          if (logTrace) log.trace 'webSocket message = Event: ' + message_data
+          parseEvent(message_data)
           break
 
         case '4':
-          log.info 'webSocket message = Error: ' + event_data.substring(1)
+          log.info 'webSocket message = Error: ' + message_data
+          sendEvent(name: 'webSocket Message', value: message_data, descriptionText: message_data, type: 'Error', displayed: true)
           break
 
         default:
-          log.error "webSocket message = (unknown:${event_data.substring(0,1)}): " + event_data.substring(1)
+          log.error "webSocket message = (unknown:${message_type}): ${message_data}"
+          sendEvent(name: 'webSocket Message', value: message_data, descriptionText: message_data, type: 'Unknown type', displayed: true)
           break
       }
       break
@@ -519,6 +599,6 @@ def webSocketStatus(String message) {
       state.webSocketConnectAttempt += 1
   }
 
-  if (isLoggedIn && !state.webSocketConnected && state.webSocketConnectAttempt < 10)
+  if ((isLoggedIn == true) && !state.webSocketConnected && state.webSocketConnectAttempt < 10)
     runIn(120, 'connectEventSocket')
 }

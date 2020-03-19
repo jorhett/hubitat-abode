@@ -4,6 +4,18 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-03-19 Release 0.5.0
+
+### Added
+
+- Preference for how much slack to allow in socket timeout
+- Ignore lists for events types and device names
+
+### Changed
+
+- Utilize type field in alerts to communicate data source
+- Refactored session management of event socket to improve error handling
+
 ## 2020-03-18 Release 0.4.0
 
 ### Added
