@@ -16,8 +16,6 @@
     author: 'Jo Rhett',
     importUrl: 'https://raw.githubusercontent.com/jorhett/hubitat-abode/master/AbodeAlarm.groovy',
   ) {
-    // capability 'Alarm'
-    // capability 'Chime'
     capability 'Actuator'
     capability 'Refresh'
     command 'armAway'
@@ -31,16 +29,24 @@
   preferences {
     if(showLogin != false) {
       section('Abode API') {
-        input name: 'username', type: 'text', title: 'Abode username',   required: true
-        input name: 'password', type: 'text', title: 'Abode password',   required: true
-        input name: 'mfa_code', type: 'text', title: 'Current MFA Code', required: false, description: '<em>Not stored -- used one time</em>'
+        input name: 'username', type: 'text', title: 'Abode username',   required: true,  displayDuringSetup: true, description: '<em>Abode username</em>'
+        input name: 'password', type: 'text', title: 'Abode password',   required: true,  displayDuringSetup: true, description: '<em>Abode password</em>'
+        input name: 'mfa_code', type: 'text', title: 'Current MFA Code', required: false, displayDuringSetup: true, description: '<em>Not stored -- used one time</em>'
       }
     }
     section('Behavior') {
-      input name: 'showLogin',    type: 'bool',   title: 'Show Login',           defaultValue: true,  description: '<em>Show login fields</em>', submitOnChange: true
-      input name: 'logDebug',     type: 'bool',   title: 'Enable debug logging', defaultValue: true,  description: '<em>for 2 hours</em>'
-      input name: 'logTrace',     type: 'bool',   title: 'Enable trace logging', defaultValue: false, description: '<em>for 30 minutes</em>'
-      input name: 'timeoutSlack', type: 'number', title: 'Timeout Slack',        defaultValue: '30',  description: '<em>seconds beyond timeout</em>'
+      input name: 'targetModeAway', type: 'enum',   title: 'Hubitat Mode when Abode Away',     options: location.getModes().collect { it.toString() }
+      input name: 'targetModeHome', type: 'enum',   title: 'Hubitat Mode when Abode Home',     options: location.getModes().collect { it.toString() }
+      input name: 'syncArming',     type: 'bool',   title: 'Sync Exit Delay start',            defaultValue: false, description: '<em>Enable concurrent exit delays</em>'
+
+      input name: 'saveContacts',   type: 'bool',   title: 'Save Abode contact events',        defaultValue: false, description: '<em>...to Hubitat Events</em>'
+      input name: 'saveGeofence',   type: 'bool',   title: 'Save Abode geofence events',       defaultValue: false, description: '<em>...to Hubitat Events</em>'
+      input name: 'saveAutomation', type: 'bool',   title: 'Save CUE Automation actions',      defaultValue: false, description: '<em>...to Hubitat Events</em>'
+
+      input name: 'showLogin',      type: 'bool',   title: 'Show login fields',                defaultValue: true,  description: '<em>Show login fields</em>', submitOnChange: true
+      input name: 'logDebug',       type: 'bool',   title: 'Enable debug logging',             defaultValue: true,  description: '<em>for 2 hours</em>'
+      input name: 'logTrace',       type: 'bool',   title: 'Enable trace logging',             defaultValue: false, description: '<em>for 30 minutes</em>'
+      input name: 'timeoutSlack',   type: 'number', title: 'Timeout slack in seconds',         defaultValue: '30',  description: '<em><b>+</b> for resilience, <b>-</b> reconnect faster</em>'
     }
   }
 }
@@ -50,6 +56,8 @@ def installed() {
   log.debug 'installed'
   device.updateSetting('showLogin', [value: true, type: 'bool'])
   initialize()
+  if (!childDevices)
+    createIsArmedSwitch()
 }
 
 private initialize() {
@@ -62,6 +70,8 @@ def updated() {
   log.info 'debug logging is: ' + logDebug
   log.info 'description logging is: ' + logDetails
   log.info 'Abode username: ' + username
+  if (!childDevices)
+    createIsArmedSwitch()
 
   // Disable high levels of logging after time
   if (logTrace) runIn(1800,disableTrace)
@@ -114,6 +124,11 @@ def disableDebug(String level) {
 def disableTrace(String level) {
   log.info "Timed elapsed, disabling trace logging"
   device.updateSetting("logTrace", [value: 'false', type: 'bool'])
+}
+
+// isArmed Child Switch
+def createIsArmedSwitch() {
+  addChildDevice('hubitat', 'Virtual Switch', device.id + '-isArmed', [name: device.name + '-isArmed', isComponent: true])
 }
 
 // Abode actions
@@ -197,6 +212,18 @@ private changeMode(String new_mode) {
 private updateMode(String new_mode) {
   if (logDebug) log.info 'Gateway mode has changed to ' + new_mode
   sendEvent(name: "gatewayMode", value: new_mode, descriptionText: 'Gateway mode has changed to ' + new_mode, displayed: true)
+
+  // Set isArmed?
+  isArmed = getChildDevice(device.id + '-isArmed')
+  if (new_mode == 'standby')
+    isArmed.off()
+  else {
+    isArmed.on()
+    if (targetModeAway && new_mode == 'away')
+      location.setMode(targetModeAway)
+    else if (targetModeHome)
+      location.setMode(targetModeHome)
+  }
 }
 
 // Abode types
@@ -212,19 +239,6 @@ private getPanel() {
 private getUser() {
   doHttpRequest('GET','/api/v1/user')
 }
-/* until I get to these
-private getSounds() {
-  doHttpRequest('GET','/api/v1/sounds')
-}
-
-private getSiren() {
-  doHttpRequest('GET','/api/v1/siren')
-}
-
-private getDevices() {
-  doHttpRequestdoRequestJson('GET','/api/v1/devices')
-}
-*/
 
 private parseLogin(Map data) {
   state.token = data.token
@@ -344,7 +358,7 @@ private doHttpRequest(String method, String path, Map body = [:]) {
   return result
 }
 
-// Abode websocket handling
+// Abode event websocket handling
 private connectEventSocket() {
   if (!state.webSocketConnectAttempt) state.webSocketConnectAttempt = 0
   if (logDebug) log.debug "Attempting WebSocket connection for Abode events (attempt ${state.webSocketConnectAttempt})"
@@ -416,6 +430,8 @@ private eventsToIgnore() {
     // Internal alarm tracking events used by Abode responders
     'alarm.add',
     'alarm.del',
+    // Nest integration events
+    'nest.refresh.true',
   ]
 }
 
@@ -430,14 +446,62 @@ String formatEventUser(HashMap jsondata) {
   return userdata
 }
 
+def syncArmingEvents(String event_type) {
+  switch(event_type) {
+    case ~/Arming .* Away.*/:
+      if (targetModeAway) location.setMode(targetModeAway)
+      break
+    case ~/Arming .* Home.*/:
+      if (targetModeHome) location.setMode(targetModeHome)
+      break
+    default:
+      // ignore it
+      break
+  }
+}
+
+def sendEnabledEvents(
+  String alert_name,
+  String alert_value,
+  String message,
+  String alert_type
+) {
+  switch(alert_type) {
+    // Ignore camera events
+    case ~/.* Cam/:
+      break
+
+    // User choice to log
+    case ~/.* Contact/:     // or event code 5100 open, 5101 closed, 5110 unlocked, 5111 locked
+      if (saveContacts)
+        sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
+      break
+
+    case ~/CUE Automation/:    // or event code 520x
+      if (saveAutomation)
+        sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
+      break
+
+    default:
+      sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
+      break
+  }
+}
+
 def parseEvent(String event_text) {
   twovalue = event_text =~ /^\["com\.goabode\.([\w+\.]+)",(.*)\]$/
   if (twovalue.find()) {
     event_type = twovalue[0][1]
     event_data = twovalue[0][2]
     switch(event_data) {
-      case 'null':
-        message = 'null'
+      // Quoted text
+      case ~/^".*"$/:
+        message = event_data[1..-2]
+        break
+
+      // Unquoted text
+      case ~/^\w+$/:
+        message = event_data
         break
 
       // JSON format
@@ -463,13 +527,8 @@ def parseEvent(String event_text) {
           alert_type = ''
         break
 
-      // Quoted text
-      case ~/^".*"$/:
-        message = event_data[1..-2]
-        break
-
       default:
-        log.error "Event ${event_type} has unknown data format: ${event_data}"
+        log.warn "Event ${event_type} has unknown data format: ${event_data}"
         message = event_data
         break
     }
@@ -485,8 +544,16 @@ def parseEvent(String event_text) {
         if (logDebug) log.debug "${event_type} -${device_type} ${message}"
 
         // Devices we ignore events for
-        if (! devicesToIgnore().contains(details.device_name))
-          sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
+        if (! devicesToIgnore().contains(details.device_name)) {
+          if (syncArming) syncArmingEvents(details.event_type)
+          sendEnabledEvents(alert_name, alert_value, message, alert_type)
+        }
+         break
+
+      // Presence/Geofence updates
+      case ~/fence.update.*/:
+        if (saveGeofence)
+          sendEvent(name: details.name, value: details.location, descriptionText: details.message, type: 'Geofence', displayed: true)
         break
 
       default:
@@ -494,7 +561,7 @@ def parseEvent(String event_text) {
         break
     }
   } else {
-    log.error "Unparseable Event message: ${event_text}"
+    log.warn "Unparseable Event message: ${event_text}"
   }
 }
 
@@ -547,7 +614,6 @@ def parse(String message) {
           break
 
         case '2':
-          if (logTrace) log.trace 'webSocket message = Event: ' + message_data
           parseEvent(message_data)
           break
 
@@ -557,14 +623,14 @@ def parse(String message) {
           break
 
         default:
-          log.error "webSocket message = (unknown:${message_type}): ${message_data}"
+          log.warn "webSocket message = (unknown:${message_type}): ${message_data}"
           sendEvent(name: 'webSocket Message', value: message_data, descriptionText: message_data, type: 'Unknown type', displayed: true)
           break
       }
       break
 
     default:
-      log.error "Unknown webSocket event (${event_type}) received: " + event_data
+      log.warn "Unknown webSocket event (${event_type}) received: " + event_data
       break
   }
 }

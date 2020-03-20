@@ -4,6 +4,15 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-03-21 Beta Release 0.6.0
+
+### Added
+
+- Options to synchronize Abode mode changes to Hubitat Mode
+- Option to sync mode when exit delay starts
+- Virtual switch isArmed which be used by Mode Manager for Return from Away
+- Ignore list for events we can't use
+
 ## 2020-03-19 Release 0.5.0
 
 ### Added
