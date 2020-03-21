@@ -4,6 +4,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-03-24 Beta Release 0.6.1
+
+### Changed
+
+- Suppress Hubitat mode change when Abode mode was set from Hubitat
+- Avoid processing Abode mode update to same mode
+- Improve log output in different socket disconnection scenarios
+
 ## 2020-03-21 Beta Release 0.6.0
 
 ### Added

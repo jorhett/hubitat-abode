@@ -197,20 +197,23 @@ private clearLoginState() {
   sendEvent(name: 'isLoggedIn', value: false, displayed: true)
 }
 
+// Send a request to change mode to Abode
 private changeMode(String new_mode) {
-  current_mode = mode
-  if(current_mode != new_mode) {
+  if(new_mode != device.currentValue('gatewayMode')) {
+    // Only update area 1 since area is not returned in event messages
     reply = doHttpRequest('PUT','/api/v1/panel/mode/1/' + new_mode)
-    if (reply['area'] == 1)
-      log.info "Successfully sent request to change gateway mode to ${new_mode}"
+    if (reply['area'] == '1') {
+      log.info "Sent request to change Abode gateway mode to ${new_mode}"
+      state.localModeChange = new_mode
+    }
   } else {
     if (logDebug) log.debug "Gateway is already in mode ${new_mode}"
   }
 }
 
-// Only update area 1 since area is not provided in event messages
+// Process an update from Abode that the mode has changed
 private updateMode(String new_mode) {
-  if (logDebug) log.info 'Gateway mode has changed to ' + new_mode
+  log.info 'Abode gateway mode has changed to ' + new_mode
   sendEvent(name: "gatewayMode", value: new_mode, descriptionText: 'Gateway mode has changed to ' + new_mode, displayed: true)
 
   // Set isArmed?
@@ -219,10 +222,20 @@ private updateMode(String new_mode) {
     isArmed.off()
   else {
     isArmed.on()
-    if (targetModeAway && new_mode == 'away')
-      location.setMode(targetModeAway)
-    else if (targetModeHome)
-      location.setMode(targetModeHome)
+
+    // Avoid changing the mode if it's a rebound from a local action
+    if (new_mode == state.localModeChange) {
+      state.remove('localModeChange')
+    } else {
+      if (targetModeAway && new_mode == 'away') {
+        log.info 'Changing Hubitat mode to ' + new_mode
+        location.setMode(targetModeAway)
+      }
+      else if (targetModeHome) {
+        log.info 'Changing Hubitat mode to ' + new_mode
+        location.setMode(targetModeHome)
+      }
+    }
   }
 }
 
@@ -285,7 +298,7 @@ private parseMode(Map mode, Set areas) {
     modeMap[number] = mode["area_${number}"]
   }
   // Status is based on area 1 only
-  if (gatewayMode != modeMap['1'])
+  if (device.currentValue('gatewayMode') != modeMap['1'])
     sendEvent(name: "gatewayMode", value: modeMap['1'], descriptionText: "Gateway mode is ${modeMap['1']}", displayed: true)
 
   state.modes = modeMap
@@ -359,7 +372,7 @@ private doHttpRequest(String method, String path, Map body = [:]) {
 }
 
 // Abode event websocket handling
-private connectEventSocket() {
+def connectEventSocket() {
   if (!state.webSocketConnectAttempt) state.webSocketConnectAttempt = 0
   if (logDebug) log.debug "Attempting WebSocket connection for Abode events (attempt ${state.webSocketConnectAttempt})"
   try {
@@ -388,10 +401,10 @@ private terminateEventSocket() {
   }
 }
 
+// failure handler: validate state and reconnect in 5 seconds
 private restartEventSocket() {
   terminateEventSocket()
-  refresh()
-  runInMillis(30000, connectEventSocket) // Try connect again in 30 seconds
+  runInMillis(5000, refresh)
 }
 
 def sendPing() {
@@ -408,11 +421,16 @@ def receivePong() {
   runInMillis(state.webSocketPingInterval, sendPing)
 }
 
+// This is called every 5 minutes whether we are connected or not
 def checkSocketTimeout() {
-  responseTimeout = state.lastMsgReceived + state.webSocketPingTimeout + (timeoutSlack*1000)
-  if (now() > responseTimeout) {
-    log.warn 'Socket ping timeout - Disconnecting Abode event socket'
-    restartEventSocket()
+  if (state.webSocketConnected) {
+    responseTimeout = state.lastMsgReceived + state.webSocketPingTimeout + (timeoutSlack*1000)
+    if (now() > responseTimeout) {
+      log.warn 'Socket ping timeout - Disconnecting Abode event socket'
+      restartEventSocket()
+    }
+  } else {
+    connectEventSocket()
   }
 }
 
