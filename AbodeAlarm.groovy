@@ -158,6 +158,7 @@ private login() {
     sendEvent(name: 'isLoggedIn', value: true, displayed: true)
     device.updateSetting('showLogin', [value: false, type: 'bool'])
     parseLogin(reply)
+    state.access_token = getAccessToken()
     parsePanel(getPanel())
     connectEventSocket()
   }
@@ -175,6 +176,7 @@ private validateSession() {
   }
   else {
     parseUser(user)
+    state.access_token = getAccessToken()
   }
   return logged_in
 }
@@ -255,11 +257,8 @@ private getUser() {
 
 private parseLogin(Map data) {
   state.token = data.token
-  state.access_token = getAccessToken()
-  state.loginExpires = data.expired_at
 
   // Login contains a panel hash which is different enough we can't reuse parsePanel()
-  device.data.remove('loginExpires')
   ['ip','mac','model','online'].each() { field ->
     updateDataValue(field, data.panel[field])
   }
@@ -595,7 +594,7 @@ def parse(String message) {
 
   switch(event_type) {
     case '0':
-      log.info 'webSocket session open received'
+      log.debug 'webSocket session open received'
       jsondata = parseJson(event_data)
       if (jsondata.containsKey('pingInterval')) state.webSocketPingInterval = jsondata['pingInterval']
       if (jsondata.containsKey('pingTimeout'))  state.webSocketPingTimeout  = jsondata['pingTimeout']
@@ -603,7 +602,7 @@ def parse(String message) {
       break
 
     case '1':
-      log.info 'webSocket session close received'
+      log.debug 'webSocket session close received'
       restartEventSocket()
       break
 
@@ -636,8 +635,15 @@ def parse(String message) {
           break
 
         case '4':
-          log.info 'webSocket message = Error: ' + message_data
+          log.warn 'webSocket message = Error: ' + message_data
           sendEvent(name: 'webSocket Message', value: message_data, descriptionText: message_data, type: 'Error', displayed: true)
+
+          // Authorization failure message is enclosed in double quotes ;p
+          if (message_data == '"Not Authorized"') {
+            terminateEventSocket()
+            // validate the session and get a new access token
+            refresh()
+          }
           break
 
         default:
@@ -658,15 +664,15 @@ def webSocketStatus(String message) {
   if (logTrace) log.trace 'webSocketStatus ' + message
   switch(message) {
     case ~/^status: open.*$/:
-      log.info 'Connected to Abode event socket'
+      log.debug 'Connected to Abode event socket'
 		  sendEvent([name: 'eventSocket', value: 'connected'])
       state.webSocketConnected = true
       state.webSocketConnectAttempt = 0
 		  break
 
     case ~/^status: closing.*$/:
-      log.info 'Closing connection to Abode event socket'
-		  sendEvent([name: 'eventSocket', value: 'disconnected'])
+      log.debug 'Closing connection to Abode event socket'
+      sendEvent([name: 'eventSocket', value: 'disconnected'])
       state.webSocketConnected = false
       state.webSocketConnectAttempt = 0
       break
@@ -683,6 +689,6 @@ def webSocketStatus(String message) {
       state.webSocketConnectAttempt += 1
   }
 
-  if ((isLoggedIn == true) && !state.webSocketConnected && state.webSocketConnectAttempt < 10)
+  if ((device.currentValue('isLoggedIn') == true) && !state.webSocketConnected && state.webSocketConnectAttempt < 10)
     runIn(120, 'connectEventSocket')
 }

@@ -4,6 +4,19 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-03-28 Beta Release 0.6.2
+
+### Changed
+
+- Recognize authorization failure during websocket setup and act appropriately
+- Get a new access token during refresh()
+- Demote some log messages to Debug as they've turned out to be uninformative for normal use
+- Promote error responses up to Warn log level
+
+### Removed
+
+- The datetime returned by the API which was previously stored in `loginExpires` (but never used) has been found to be irrelevant
+
 ## 2020-03-24 Beta Release 0.6.1
 
 ### Changed

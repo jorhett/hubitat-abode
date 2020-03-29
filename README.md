@@ -3,23 +3,16 @@
 Realtime management and tracking of an Abode Alarm system. This works for both controlling Abode from Hubitat,
 and also responding realtime in Hubitat to changes initiated from Abode (mobile, CUE automations, etc).
 
-- Set Abode mode via Hubitat Rule Manager or device page
-- Observe mode changes initiated by Abode and trigger actions in Rule Manager
+- Set Abode gateway mode via Hubitat Rule Manager or device page
+- Update Hubitat Mode based on Abode gateway mode changes
 - Copy Abode timeline events to Hubitat device events
+- Abode gateway mode changes and events can be used as Triggers in Hubitat Rule Manager
+- Renew access tokens automatically upon expiration
 
 ## Inspired by
 
 * Hubitat example driver code from https://github.com/hubitat/HubitatPublic/tree/master/examples/drivers
 * AbodePy by https://github.com/MisterWil/abodepy
-
-## Warranty
-
-I certify that this code is not suitable for any purpose.
-If you are foolish enough to install it, **gremlins will eat everything you love**.
-*Don't say I didn't tell you.*
-
-I'm associated with neither Hubitat nor Abode in any way other than being a customer of theirs.
-They've likely never seen this driver and certainly don't provide support for it.
 
 # Installation
 
@@ -38,26 +31,32 @@ Import the driver from following URL:
 
 ## Known limitations
 
-* The tokens supplied by Abode expire in roughly a week. You can see the expiration date in the driver data at the bottom of the page. I haven't yet had the chance to run a token past its lifetime to determine if we can renewed it or not. It is possible we'll have to manually re-auth every week. This will work fine for username/password but may require human intervention for MFA auth. *I'll figure this out when I stop resetting my session lifetime for testing purposes* ;-)
+* The Abode API has been reverse engineered, and has not been officially published by Abode. They can make a breaking change without warning.
 
-* I can't find any data returned by the API to identify which areas are in use. My Iota only seems to use `area_1` but there are two areas returned by the API, both of which can be armed and disarmed. Right now the interface only uses area 1, as the events from Abode only reflect changes to area 1. If any of you using it have more than two areas, please send me some trace output from your panel.
+* The login expiration returned by the API does not appear to be used. My sessions have last beyond this time. The code successfully acquires new access tokens when the previous one expires. This appears to indicate that periodic re-authentication may not be necessary. See previous caveot that Abode could change this behavior without warning.
 
-* It is totally possible to identify devices on the Abode and make them visible to Hubitat. I haven't coded this yet because I personally didn't need it, and it's not going to work well until the event socket works.
+* The Abode API does not support triggering the alarm remotely, and Abode has stated that they have no plans to add this feature. This means that Hubitat Safety Monitor can be triggered when the Abode alarm goes off, but not vice versa.
+
+* I can't find any data returned by the API to identify which areas are in use. My Iota only seems to use `area_1` but there are two areas returned by the API, both of which can be armed and disarmed. Right now the interface only uses area 1, as the events from Abode only reflect changes to area 1. If you are using more than one area, please send me some trace output from your panel.
+
+* It is possible to identify devices on the Abode and make them visible to Hubitat. I haven't coded this yet because I personally didn't need it. Ping me if you feel otherwise.
 
 # Development Roadmap
 
-You should not install any version of this driver that starts with `0.` unless you are willing to
-~~die in horrible pain~~ supply extensive debug logs, and add debugging snippets on request.
+* Standard [CHANGELOG](CHANGELOG.md) contains past change history
+* New features can be requested by supplying trace logs of the interesting traffic
 
-Which is to say--I'm going to ignore any *I want this feature to be provided for me* issues until at least version 1.0.
+I'm open to adding new features, but lacking a lab full of Abode gear, I can't develop the features without seeing the interactions in detail. So features will only be added if you are willing to supply extensive trace logs from your setup so that I can see what your equipment says.
 
-If you put forth the effort to provide useful debugging details or attempt a Pull Request for the feature you want,
-I'll treat it with respect and dignity *whenever life allows me time to work on this*.
+If you put forth the effort to provide useful debugging details or attempt a Pull Request for the feature you want, I'll treat it with respect and dignity *whenever life allows me time to work on this*.
 
-## Things you should read
+# License and Warranty
 
-* Standard [CHANGELOG](CHANGELOG.md) contains change history
 * Licensed under the [Apache License, Version 2.0](LICENSE)
+* Warranty spelled out in the license clearly says:
+    [Licensor provides the Work on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND](LICENSE)
+* Neither Hubitat nor Abode provide support for this integration.
+  I'm associated with neither Hubitat nor Abode in any way other than being a customer of theirs.
 
 A failure to properly blame me when using my code will lead to me publicly mocking you in my books,
 articles, and speaking engagements for decades. If your work benefits an entity, then my lawyer and theirs
