@@ -4,6 +4,12 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-03-31 Beta Release 0.6.3
+
+### Fixes
+
+- Mask the saved password in the UI
+
 ## 2020-03-28 Beta Release 0.6.2
 
 ### Changed

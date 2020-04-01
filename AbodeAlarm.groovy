@@ -14,7 +14,7 @@
     name: 'Abode Alarm',
     namespace: 'jorhett',
     author: 'Jo Rhett',
-    importUrl: 'https://raw.githubusercontent.com/jorhett/hubitat-abode/master/AbodeAlarm.groovy',
+    importUrl: 'https://raw.githubusercontent.com/jorhett/hubitat-abode/v0/AbodeAlarm.groovy',
   ) {
     capability 'Actuator'
     capability 'Refresh'
@@ -29,9 +29,9 @@
   preferences {
     if(showLogin != false) {
       section('Abode API') {
-        input name: 'username', type: 'text', title: 'Abode username',   required: true,  displayDuringSetup: true, description: '<em>Abode username</em>'
-        input name: 'password', type: 'text', title: 'Abode password',   required: true,  displayDuringSetup: true, description: '<em>Abode password</em>'
-        input name: 'mfa_code', type: 'text', title: 'Current MFA Code', required: false, displayDuringSetup: true, description: '<em>Not stored -- used one time</em>'
+        input name: 'username', type: 'text',     title: 'Abode username',   required: true,  displayDuringSetup: true, description: '<em>Abode username</em>'
+        input name: 'password', type: 'password', title: 'Abode password',   required: true,  displayDuringSetup: true, description: '<em>Abode password</em>'
+        input name: 'mfa_code', type: 'text',     title: 'Current MFA Code', required: false, displayDuringSetup: true, description: '<em>Not stored -- used one time</em>'
       }
     }
     section('Behavior') {
