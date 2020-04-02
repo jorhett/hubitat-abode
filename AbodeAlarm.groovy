@@ -24,6 +24,8 @@
     command 'logout'
     attribute 'isLoggedIn', 'String'
     attribute 'gatewayMode', 'String'
+    attribute 'abodeTimeline', 'String'
+    attribute 'lastResult', 'String'
   }
 
   preferences {
@@ -152,10 +154,10 @@ private login() {
   reply = doHttpRequest('POST', '/api/auth2/login', input_values)
   if(reply.containsKey('mfa_type')) {
     updateDataValue('mfa_enabled', '1')
-    sendEvent(name: 'isLoggedIn', value: "false - requires ${reply.mfa_type}", descriptionText: "Multi-Factor Authentication required: ${reply.mfa_type}", displayed: true)
+    sendEvent(name: 'isLoggedIn', value: "false - requires ${reply.mfa_type}", descriptionText: "Multi-Factor Authentication required: ${reply.mfa_type}")
   }
   else if(reply.containsKey('token')) {
-    sendEvent(name: 'isLoggedIn', value: true, displayed: true)
+    sendEvent(name: 'isLoggedIn', value: true)
     device.updateSetting('showLogin', [value: false, type: 'bool'])
     parseLogin(reply)
     state.access_token = getAccessToken()
@@ -170,7 +172,7 @@ private validateSession() {
   logged_in = user?.id ? true : false
   if(! logged_in) {
     if (state.token) {
-      sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted transaction when not logged in', displayed: true)
+      sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted transaction when not logged in')
       clearLoginState()
     }
   }
@@ -187,7 +189,7 @@ def logout() {
     terminateEventSocket()
   }
   else {
-    sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted logout when not logged in', displayed: true)
+    sendEvent(name: 'lastResult', value: 'Not logged in', descriptionText: 'Attempted logout when not logged in')
   }
   clearLoginState()
 }
@@ -196,7 +198,7 @@ private clearLoginState() {
   state.clear()
   unschedule()
   device.updateSetting('showLogin', [value: true, type: 'bool'])
-  sendEvent(name: 'isLoggedIn', value: false, displayed: true)
+  sendEvent(name: 'isLoggedIn', value: false)
 }
 
 // Send a request to change mode to Abode
@@ -216,7 +218,7 @@ private changeMode(String new_mode) {
 // Process an update from Abode that the mode has changed
 private updateMode(String new_mode) {
   log.info 'Abode gateway mode has changed to ' + new_mode
-  sendEvent(name: "gatewayMode", value: new_mode, descriptionText: 'Gateway mode has changed to ' + new_mode, displayed: true)
+  sendEvent(name: 'gatewayMode', value: new_mode, descriptionText: 'Gateway mode has changed to ' + new_mode)
 
   // Set isArmed?
   isArmed = getChildDevice(device.id + '-isArmed')
@@ -298,7 +300,7 @@ private parseMode(Map mode, Set areas) {
   }
   // Status is based on area 1 only
   if (device.currentValue('gatewayMode') != modeMap['1'])
-    sendEvent(name: "gatewayMode", value: modeMap['1'], descriptionText: "Gateway mode is ${modeMap['1']}", displayed: true)
+    sendEvent(name: 'gatewayMode', value: modeMap['1'], descriptionText: "Gateway mode is ${modeMap['1']}")
 
   state.modes = modeMap
 }
@@ -366,7 +368,7 @@ private doHttpRequest(String method, String path, Map body = [:]) {
       log.error error.toString()
     }
   }
-  sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, type: 'API call', displayed: true)
+  sendEvent(name: 'lastResult', value: "${status} ${message}", descriptionText: message, type: 'API call')
   return result
 }
 
@@ -478,7 +480,6 @@ def syncArmingEvents(String event_type) {
 }
 
 def sendEnabledEvents(
-  String alert_name,
   String alert_value,
   String message,
   String alert_type
@@ -491,16 +492,16 @@ def sendEnabledEvents(
     // User choice to log
     case ~/.* Contact/:     // or event code 5100 open, 5101 closed, 5110 unlocked, 5111 locked
       if (saveContacts)
-        sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
+        sendEvent(name: 'abodeTimeline', value: alert_value, descriptionText: message, type: alert_type)
       break
 
     case ~/CUE Automation/:    // or event code 520x
       if (saveAutomation)
-        sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
+        sendEvent(name: 'abodeTimeline', value: alert_value, descriptionText: message, type: alert_type)
       break
 
     default:
-      sendEvent(name: alert_name, value: alert_value, descriptionText: message, type: alert_type, displayed: true)
+      sendEvent(name: 'abodeTimeline', value: alert_value, descriptionText: message, type: alert_type)
       break
   }
 }
@@ -527,13 +528,14 @@ def parseEvent(String event_text) {
         message = details.event_name
         user_info = formatEventUser(details)
         device_type = details.device_type ?: ''
-        alert_name = details.device_name ?: 'unknown'
-        alert_value = details.event_type
+        alert_value = [
+          details.device_name,
+          details.event_type
+        ].findAll { it.isEmpty() == false }.join(' ')
 
         if (details.event_type == 'Automation') {
           alert_type = 'CUE Automation'
           // Automation puts the rule name in device_name, which is backwards for our purposes
-          alert_name = 'Automation'
           alert_value = details.device_name
         }
         else if (user_info)
@@ -563,14 +565,14 @@ def parseEvent(String event_text) {
         // Devices we ignore events for
         if (! devicesToIgnore().contains(details.device_name)) {
           if (syncArming) syncArmingEvents(details.event_type)
-          sendEnabledEvents(alert_name, alert_value, message, alert_type)
+          sendEnabledEvents(alert_value, message, alert_type)
         }
          break
 
       // Presence/Geofence updates
       case ~/fence.update.*/:
         if (saveGeofence)
-          sendEvent(name: details.name, value: details.location, descriptionText: details.message, type: 'Geofence', displayed: true)
+          sendEvent(name: 'abodeTimeline', value: details.location, descriptionText: details.message, type: 'Geofence')
         break
 
       default:
@@ -636,7 +638,7 @@ def parse(String message) {
 
         case '4':
           log.warn 'webSocket message = Error: ' + message_data
-          sendEvent(name: 'webSocket Message', value: message_data, descriptionText: message_data, type: 'Error', displayed: true)
+          sendEvent(name: 'lastResult', value: 'webSocket error message', descriptionText: message_data, type: 'websocket')
 
           // Authorization failure message is enclosed in double quotes ;p
           if (message_data == '"Not Authorized"') {
@@ -648,7 +650,7 @@ def parse(String message) {
 
         default:
           log.warn "webSocket message = (unknown:${message_type}): ${message_data}"
-          sendEvent(name: 'webSocket Message', value: message_data, descriptionText: message_data, type: 'Unknown type', displayed: true)
+          sendEvent(name: 'lastResult', value: 'unknown webSocket message received', descriptionText: message_data, type: 'websocket')
           break
       }
       break
@@ -665,14 +667,14 @@ def webSocketStatus(String message) {
   switch(message) {
     case ~/^status: open.*$/:
       log.debug 'Connected to Abode event socket'
-		  sendEvent([name: 'eventSocket', value: 'connected'])
+		  sendEvent([name: 'lastResult', value: 'eventSocket connected'])
       state.webSocketConnected = true
       state.webSocketConnectAttempt = 0
 		  break
 
     case ~/^status: closing.*$/:
       log.debug 'Closing connection to Abode event socket'
-      sendEvent([name: 'eventSocket', value: 'disconnected'])
+      sendEvent([name: 'lastResult', value: 'eventSocket disconnected'])
       state.webSocketConnected = false
       state.webSocketConnectAttempt = 0
       break
