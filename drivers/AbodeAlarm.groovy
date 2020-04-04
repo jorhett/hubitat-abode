@@ -14,7 +14,7 @@
     name: 'Abode Alarm',
     namespace: 'jorhett',
     author: 'Jo Rhett',
-    importUrl: 'https://raw.githubusercontent.com/jorhett/hubitat-abode/v0/AbodeAlarm.groovy',
+    importUrl: 'https://raw.githubusercontent.com/jorhett/hubitat-abode/v0/drivers/AbodeAlarm.groovy',
   ) {
     capability 'Actuator'
     capability 'Refresh'
@@ -24,7 +24,7 @@
     command 'logout'
     attribute 'isLoggedIn', 'String'
     attribute 'gatewayMode', 'String'
-    attribute 'abodeTimeline', 'String'
+    attribute 'gatewayTimeline', 'String'
     attribute 'lastResult', 'String'
   }
 
@@ -139,7 +139,7 @@ private baseURL() {
 }
 
 private driverUserAgent() {
-  return 'AbodeAlarm/0.4.0 Hubitat Elevation driver'
+  return 'AbodeAlarm/0.7.0 Hubitat Elevation driver'
 }
 
 private login() {
@@ -232,11 +232,11 @@ private updateMode(String new_mode) {
       state.remove('localModeChange')
     } else {
       if (targetModeAway && new_mode == 'away') {
-        log.info 'Changing Hubitat mode to ' + new_mode
+        log.info 'Changing Hubitat mode to ' + targetModeAway
         location.setMode(targetModeAway)
       }
       else if (targetModeHome) {
-        log.info 'Changing Hubitat mode to ' + new_mode
+        log.info 'Changing Hubitat mode to ' + targetModeHome
         location.setMode(targetModeHome)
       }
     }
@@ -448,6 +448,7 @@ private eventsToIgnore() {
   return [
     // Internal alarm tracking events used by Abode responders
     'alarm.add',
+    'alarm.ignore',
     'alarm.del',
     // Nest integration events
     'nest.refresh.true',
@@ -492,16 +493,16 @@ def sendEnabledEvents(
     // User choice to log
     case ~/.* Contact/:     // or event code 5100 open, 5101 closed, 5110 unlocked, 5111 locked
       if (saveContacts)
-        sendEvent(name: 'abodeTimeline', value: alert_value, descriptionText: message, type: alert_type)
+        sendEvent(name: 'gatewayTimeline', value: alert_value, descriptionText: message, type: alert_type)
       break
 
     case ~/CUE Automation/:    // or event code 520x
       if (saveAutomation)
-        sendEvent(name: 'abodeTimeline', value: alert_value, descriptionText: message, type: alert_type)
+        sendEvent(name: 'gatewayTimeline', value: alert_value, descriptionText: message, type: alert_type)
       break
 
     default:
-      sendEvent(name: 'abodeTimeline', value: alert_value, descriptionText: message, type: alert_type)
+      sendEvent(name: 'gatewayTimeline', value: alert_value, descriptionText: message, type: alert_type)
       break
   }
 }
@@ -509,8 +510,12 @@ def sendEnabledEvents(
 def parseEvent(String event_text) {
   twovalue = event_text =~ /^\["com\.goabode\.([\w+\.]+)",(.*)\]$/
   if (twovalue.find()) {
-    event_type = twovalue[0][1]
+    event_class = twovalue[0][1]
     event_data = twovalue[0][2]
+
+    if (eventsToIgnore().contains(event_class))
+      return
+
     switch(event_data) {
       // Quoted text
       case ~/^".*"$/:
@@ -525,46 +530,46 @@ def parseEvent(String event_text) {
       // JSON format
       case ~/^\{.*\}$/:
         details = parseJson(event_data)
-        message = details.event_name
+
+        // These may or may not exist on any given event
         user_info = formatEventUser(details)
+        message = details.event_name ?: details.message ?: ''
         device_type = details.device_type ?: ''
+        event_type = details.event_type ?: ''
         alert_value = [
           details.device_name,
-          details.event_type
+          event_type
         ].findAll { it.isEmpty() == false }.join(' ')
 
-        if (details.event_type == 'Automation') {
+        if (event_type == 'Automation') {
           alert_type = 'CUE Automation'
           // Automation puts the rule name in device_name, which is backwards for our purposes
           alert_value = details.device_name
         }
-        else if (user_info)
+        else if (user_info.isEmpty() == false)
           alert_type = user_info
-        else if (device_type != '')
+        else if (device_type.isEmpty() == false)
           alert_type = device_type
         else
           alert_type = ''
         break
 
       default:
-        log.warn "Event ${event_type} has unknown data format: ${event_data}"
+        log.warn "Event ${event_class} has unknown data format: ${event_data}"
         message = event_data
         break
     }
-    switch(event_type) {
-      case eventsToIgnore:
-        break
-
+    switch(event_class) {
       case 'gateway.mode':
         updateMode(message)
         break
 
       case ~/^gateway\.timeline.*/:
-        if (logDebug) log.debug "${event_type} -${device_type} ${message}"
+        if (logDebug) log.debug "${event_class} -${device_type} ${message}"
 
         // Devices we ignore events for
         if (! devicesToIgnore().contains(details.device_name)) {
-          if (syncArming) syncArmingEvents(details.event_type)
+          if (syncArming) syncArmingEvents(event_type)
           sendEnabledEvents(alert_value, message, alert_type)
         }
          break
@@ -572,11 +577,11 @@ def parseEvent(String event_text) {
       // Presence/Geofence updates
       case ~/fence.update.*/:
         if (saveGeofence)
-          sendEvent(name: 'abodeTimeline', value: details.location, descriptionText: details.message, type: 'Geofence')
+          sendEvent(name: 'gatewayTimeline', value: details.location, descriptionText: details.message, type: 'Geofence')
         break
 
       default:
-        if (logDebug) log.debug "Ignoring Event ${event_type} ${message}"
+        if (logDebug) log.debug "Ignoring Event ${event_class} ${message}"
         break
     }
   } else {
@@ -590,14 +595,14 @@ def parse(String message) {
   if (logTrace) log.trace 'webSocket event raw: ' + message
 
   // First character is the event type
-  event_type = message.substring(0,1)
+  packet_type = message.substring(0,1)
   // remainder is the data (optional)
-  event_data = message.substring(1)
+  packet_data = message.substring(1)
 
-  switch(event_type) {
+  switch(packet_type) {
     case '0':
       log.debug 'webSocket session open received'
-      jsondata = parseJson(event_data)
+      jsondata = parseJson(packet_data)
       if (jsondata.containsKey('pingInterval')) state.webSocketPingInterval = jsondata['pingInterval']
       if (jsondata.containsKey('pingTimeout'))  state.webSocketPingTimeout  = jsondata['pingTimeout']
       if (jsondata.containsKey('sid'))          state.webSocketSid          = jsondata['sid']
@@ -620,8 +625,8 @@ def parse(String message) {
 
     case '4':
       // First character of the message indicates purpose
-      message_type = event_data.substring(0,1)
-      message_data = event_data.substring(1)
+      message_type = packet_data.substring(0,1)
+      message_data = packet_data.substring(1)
       switch(message_type) {
         case '0':
           log.info 'webSocket message = Event socket connected'
@@ -656,7 +661,7 @@ def parse(String message) {
       break
 
     default:
-      log.warn "Unknown webSocket event (${event_type}) received: " + event_data
+      log.warn "Unknown webSocket event (${packet_type}) received: " + packet_data
       break
   }
 }

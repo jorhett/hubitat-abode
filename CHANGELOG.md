@@ -4,6 +4,21 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 
 This project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
 
+## 2020-04-04 Beta Release 0.7.0
+
+### Added
+
+- New attribute gatewayTimeline allows event subscription to Abode gateway timeline events
+- New attribute lastResult allows event subscription to Abode portal interactions
+
+### Changed
+
+- Moved the driver into drivers/ directory, to allow both drivers and apps in this repo
+
+### Fixed
+
+- Inconsistent fields in websocket messages sometimes caused attempts to dereference null fields
+
 ## 2020-03-31 Beta Release 0.6.3
 
 ### Fixes
