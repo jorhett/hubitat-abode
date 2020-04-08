@@ -529,29 +529,7 @@ def parseEvent(String event_text) {
 
       // JSON format
       case ~/^\{.*\}$/:
-        details = parseJson(event_data)
-
-        // These may or may not exist on any given event
-        user_info = formatEventUser(details)
-        message = details.event_name ?: details.message ?: ''
-        device_type = details.device_type ?: ''
-        event_type = details.event_type ?: ''
-        alert_value = [
-          details.device_name,
-          event_type
-        ].findAll { it.isEmpty() == false }.join(' ')
-
-        if (event_type == 'Automation') {
-          alert_type = 'CUE Automation'
-          // Automation puts the rule name in device_name, which is backwards for our purposes
-          alert_value = details.device_name
-        }
-        else if (user_info.isEmpty() == false)
-          alert_type = user_info
-        else if (device_type.isEmpty() == false)
-          alert_type = device_type
-        else
-          alert_type = ''
+        json_data = parseJson(event_data)
         break
 
       default:
@@ -564,20 +542,43 @@ def parseEvent(String event_text) {
         updateMode(message)
         break
 
-      case ~/^gateway\.timeline.*/:
-        if (logDebug) log.debug "${event_class} -${device_type} ${message}"
-
-        // Devices we ignore events for
-        if (! devicesToIgnore().contains(details.device_name)) {
-          if (syncArming) syncArmingEvents(event_type)
-          sendEnabledEvents(alert_value, message, alert_type)
-        }
-         break
-
       // Presence/Geofence updates
       case ~/fence.update.*/:
         if (saveGeofence)
-          sendEvent(name: 'gatewayTimeline', value: details.location, descriptionText: details.message, type: 'Geofence')
+          sendEvent(name: 'gatewayTimeline',
+                    value: "${json_data.name}@${json_data.location}=${json_data.state}",
+                    descriptionText: json_data.message,
+                    type: 'Geofence'
+                   )
+        break
+
+      case ~/^gateway\.timeline.*/:
+        event_type = json_data.event_type
+        message = json_data.event_name
+        user_info = formatEventUser(json_data)
+
+        if (logDebug) log.debug "${event_class} -${json_data.device_type} ${message}"
+
+        if (event_type == 'Automation') {
+          alert_type = 'CUE Automation'
+          // Automation puts the rule name in device_name, which is backwards for our purposes
+          alert_value = json_data.device_name
+        }
+        else {
+          alert_value = [json_data.device_name, event_type].findAll { it.isEmpty() == false }.join('=')
+          if (user_info.isEmpty() == false)
+            alert_type = user_info
+          else if (json_data.device_type.isEmpty() == false)
+            alert_type = json_data.device_type
+          else
+            alert_type = ''
+        }
+
+        // Devices we ignore events for
+        if (! devicesToIgnore().contains(json_data.device_name)) {
+          if (syncArming) syncArmingEvents(event_type)
+            sendEnabledEvents(alert_value, message, alert_type)
+        }
         break
 
       default:
