@@ -20,7 +20,7 @@ Follow Hubitat's instructions for adding new driver code:
   [https://docs.hubitat.com/index.php?title=How_to_Install_Custom_Drivers](https://docs.hubitat.com/index.php?title=How_to_Install_Custom_Drivers)
 
 Import the driver from following URL:
-  [https://raw.githubusercontent.com/jorhett/hubitat-abode/v0/drivers/AbodeAlarm.groovy](https://github.com/jorhett/hubitat-abode/blob/v0/drivers/AbodeAlarm.groovy)
+  [https://raw.githubusercontent.com/jorhett/hubitat-abode/v1/drivers/AbodeAlarm.groovy](https://github.com/jorhett/hubitat-abode/blob/v1/drivers/AbodeAlarm.groovy)
 
 ## Requirements
 

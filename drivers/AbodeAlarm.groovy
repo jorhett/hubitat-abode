@@ -14,7 +14,7 @@
     name: 'Abode Alarm',
     namespace: 'jorhett',
     author: 'Jo Rhett',
-    importUrl: 'https://raw.githubusercontent.com/jorhett/hubitat-abode/v0/drivers/AbodeAlarm.groovy',
+    importUrl: 'https://raw.githubusercontent.com/jorhett/hubitat-abode/v1/drivers/AbodeAlarm.groovy',
   ) {
     capability 'Actuator'
     capability 'Refresh'
