@@ -205,9 +205,9 @@ private clearLoginState() {
 private changeMode(String new_mode) {
   if(new_mode != device.currentValue('gatewayMode')) {
     // Only update area 1 since area is not returned in event messages
+    log.info "Sending request to change Abode gateway mode to ${new_mode}"
     reply = doHttpRequest('PUT','/api/v1/panel/mode/1/' + new_mode)
     if (reply['area'] == '1') {
-      log.info "Sent request to change Abode gateway mode to ${new_mode}"
       state.localModeChange = new_mode
     }
   } else {
@@ -533,7 +533,7 @@ def parseEvent(String event_text) {
         break
 
       default:
-        log.warn "Event ${event_class} has unknown data format: ${event_data}"
+        log.warn "Abode event ${event_class} has unknown data format: ${event_data}"
         message = event_data
         break
     }
@@ -582,11 +582,11 @@ def parseEvent(String event_text) {
         break
 
       default:
-        if (logDebug) log.debug "Ignoring Event ${event_class} ${message}"
+        if (logDebug) log.debug "Ignoring event ${event_class} ${message}"
         break
     }
   } else {
-    log.warn "Unparseable Event message: ${event_text}"
+    log.warn "Unparseable Abode event message: ${event_text}"
   }
 }
 
@@ -630,12 +630,12 @@ def parse(String message) {
       message_data = packet_data.substring(1)
       switch(message_type) {
         case '0':
-          log.info 'webSocket message = Event socket connected'
+          log.info 'Abode event socket connected'
           runInMillis(state.webSocketPingInterval, sendPing)
           break
 
         case '1':
-          log.info 'webSocket message = Event socket disconnected'
+          log.info 'webSocket message = event socket disconnected'
           break
 
         case '2':
@@ -686,13 +686,13 @@ def webSocketStatus(String message) {
       break
 
     case ~/^failure:(.*)$/:
-      log.warn 'Event socket connection: ' + message
+      log.warn 'Abode event socket connection: ' + message
       state.webSocketConnected = false
       state.webSocketConnectAttempt += 1
       break
 
     default:
-      log.warn 'Event socket sent unexpected message: ' + message
+      log.warn 'Abode event socket sent unexpected message: ' + message
       state.webSocketConnected = false
       state.webSocketConnectAttempt += 1
   }

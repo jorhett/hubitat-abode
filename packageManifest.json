@@ -1,0 +1,19 @@
+{
+  "packageName": "Abode Alarm",
+  "minimumHEVersion": "2.1.0",
+  "author": "Jo Rhett",
+  "version": "1.0.1",
+  "dateReleased": "2020-07-18",
+  "licenseFile": "https://github.com/jorhett/hubitat-abode/blob/master/LICENSE",
+  "releaseNotes": "https://github.com/jorhett/hubitat-abode/blob/master/CHANGELOG.md",
+  "apps" : [],
+  "drivers" : [
+    {
+      "id" : "a3f88dd8-474c-4fe7-a226-521f44638d87",
+      "name": "Abode Alarm",
+      "namespace": "jorhett",
+      "location": "https://raw.githubusercontent.com/jorhett/hubitat-abode/v1.0.1/drivers/AbodeAlarm.groovy",
+      "required": true
+    }
+  ]
+}

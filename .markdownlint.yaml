@@ -1,0 +1,4 @@
+---
+headers:
+  allow_different_nesting: true
+line_length: false
